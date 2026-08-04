@@ -13,6 +13,7 @@ import 'package:agronavigator_app/widgets/info_bar.dart';
 import 'package:agronavigator_app/widgets/work_controls.dart';
 import 'package:agronavigator_app/services/yield_calculator.dart';
 import 'package:agronavigator_app/widgets/navigation_canvas.dart';
+import 'package:agronavigator_app/widgets/gps_signal_indicator.dart';
 
 class WorkPage extends StatefulWidget {
   final WorkSettings settings;
@@ -29,15 +30,18 @@ class _WorkPageState extends State<WorkPage> {
   // GPS
   LatLng? currentLatLng; // Последняя полученная GPS точка
   LatLng? lastRecordedPoint; // Последняя координата, записанная в рабочий трек
-  XYPoint? currentXYPoint; // Текущее положение трактора в локальной системе координат
-  bool isRecording = false; // Запись опорной траектории для построения направляющих
+  XYPoint?
+  currentXYPoint; // Текущее положение трактора в локальной системе координат
+  bool isRecording =
+      false; // Запись опорной траектории для построения направляющих
   // НАВИГАЦИЯ
   // Начало локальной системы координат
-  // Устанавливается один раз после начала работы и больше не изменяется 
+  // Устанавливается один раз после начала работы и больше не изменяется
   LatLng? origin;
   List<XYPoint> referenceTrack = []; // Опорный проход, записанный пользователем
   List<List<XYPoint>> guidanceLines = []; // Построенные параллельные линии
-  final CoverageGenerator coverage = CoverageGenerator(); // Генератор полигона обработанной площади
+  final CoverageGenerator coverage =
+      CoverageGenerator(); // Генератор полигона обработанной площади
   final HectareCalculator hectareCalculator = HectareCalculator();
   final YieldCalculator yieldCalculator = YieldCalculator();
   List<XYPoint> coveragePolygon = []; // Полигон обработанной площади
@@ -213,6 +217,7 @@ class _WorkPageState extends State<WorkPage> {
       }
     });
   }
+
   // Основной экран навигации.
   // Содержит:
   // - рабочую область;
@@ -221,6 +226,44 @@ class _WorkPageState extends State<WorkPage> {
   // - кнопки управления.
   @override
   Widget build(BuildContext context) {
+    final infoBar = InfoBar(
+      area: hectares,
+      speed: gpsSpeed * 3.6,
+      gpsAccuracy: gpsAccuracy,
+      yieldValue: yieldValue,
+      distance: bunkerDistance,
+    );
+    final controls = WorkControls(
+      onStart: () {
+        if (currentLatLng != null) {
+          setState(() {
+            referenceTrack.clear();
+            isRecording = true;
+          });
+        }
+      },
+      onStop: () {
+        setState(() {
+          isRecording = false;
+          createOffsetPass();
+        });
+      },
+      onBunker: () {
+        if (bunkerWeight == null) {
+          return;
+        }
+        setState(() {
+          yieldValue = yieldCalculator.calculate(
+            workingWidth: workingWidth,
+            distance: bunkerDistance,
+            bunkerWeight: bunkerWeight!,
+          );
+          bunkerDistance = 0;
+          lastRecordedPoint = currentLatLng;
+        });
+      },
+    );
+
     return Scaffold(
       body: Column(
         children: [
@@ -233,7 +276,7 @@ class _WorkPageState extends State<WorkPage> {
                   coveragePolygon: coveragePolygon,
                   currentPoint: currentXYPoint,
                   gpsHeading: gpsHeading,
-                  rotateWithGpsHeading: false,
+                  rotateWithGpsHeading: true,
                 ),
 
                 if (isGpsInitializing)
@@ -271,49 +314,74 @@ class _WorkPageState extends State<WorkPage> {
                       ),
                     ),
                   ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: InfoBar(
-                    area: hectares,
-                    speed: gpsSpeed * 3.6,
-                    gpsAccuracy: gpsAccuracy,
-                    yieldValue: yieldValue,
-                    distance: bunkerDistance,
-                  ),
-                ),
-                Positioned(
-                  right: 16,
-                  bottom: 20,
-                  child: WorkControls(
-                    onStart: () {
-                      if (currentLatLng != null) {
-                        setState(() {
-                          referenceTrack.clear();
-                          isRecording = true;
-                        });
-                      }
-                    },
-                    onStop: () {
-                      setState(() {
-                        isRecording = false;
-                        createOffsetPass();
-                      });
-                    },
-                    onBunker: () {
-                      if (bunkerWeight == null) {
-                        return;
-                      }
-                      setState(() {
-                        yieldValue = yieldCalculator.calculate(
-                          workingWidth: workingWidth,
-                          distance: bunkerDistance,
-                          bunkerWeight: bunkerWeight!,
-                        );
-                        bunkerDistance = 0;
-                        lastRecordedPoint = currentLatLng;
-                      });
+                Positioned.fill(
+                  child: OrientationBuilder(
+                    builder: (context, orientation) {
+                      final isPortrait = orientation == Orientation.portrait;
+
+                      return SafeArea(
+                        minimum: EdgeInsets.fromLTRB(
+                          8,
+                          8,
+                          isPortrait ? 8 : 16,
+                          isPortrait ? 8 : 20,
+                        ),
+                        child: isPortrait
+                            ? Align(
+                                alignment: Alignment.topLeft,
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      InfoBar(
+                                        area: hectares,
+                                        speed: gpsSpeed * 3.6,
+                                        gpsAccuracy: gpsAccuracy,
+                                        yieldValue: yieldValue,
+                                        distance: bunkerDistance,
+                                        compact: true,
+                                      ),
+                                      const SizedBox(height: 6),
+                                      WorkControls(
+                                        onStart: controls.onStart,
+                                        onStop: controls.onStop,
+                                        onBunker: controls.onBunker,
+                                        compact: true,
+                                      ),
+                                      const SizedBox(height: 10),
+                                      GpsSignalIndicator(
+                                        accuracy: gpsAccuracy,
+                                        hasSignal: currentLatLng != null,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : Stack(
+                                children: [
+                                  Align(
+                                    alignment: Alignment.topLeft,
+                                    child: infoBar,
+                                  ),
+                                  Align(
+                                    alignment: Alignment.topRight,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 12, right: 12),
+                                      child: GpsSignalIndicator(
+                                        accuracy: gpsAccuracy,
+                                        hasSignal: currentLatLng != null,
+                                      ),
+                                    ),
+                                  ),
+                                  Align(
+                                    alignment: Alignment.bottomRight,
+                                    child: controls,
+                                  ),
+                                ],
+                              ),
+                      );
                     },
                   ),
                 ),
@@ -325,14 +393,14 @@ class _WorkPageState extends State<WorkPage> {
     );
   }
 
- // Строит параллельные направляющие
- // по записанному referenceTrack.
- //
- // Не изменяет:
- // - GPS-трек;
- // - площадь;
- // - полигон;
- // - расстояние.
+  // Строит параллельные направляющие
+  // по записанному referenceTrack.
+  //
+  // Не изменяет:
+  // - GPS-трек;
+  // - площадь;
+  // - полигон;
+  // - расстояние.
   void createOffsetPass() {
     guidanceLines.clear();
 

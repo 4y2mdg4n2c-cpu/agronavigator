@@ -5,6 +5,7 @@ class InfoCard extends StatelessWidget {
   final String value;
   final String unit;
   final IconData icon;
+  final bool compact;
 
   const InfoCard({
     super.key,
@@ -12,6 +13,7 @@ class InfoCard extends StatelessWidget {
     required this.value,
     required this.unit,
     required this.icon,
+    this.compact = false,
   });
 
   @override
@@ -19,49 +21,40 @@ class InfoCard extends StatelessWidget {
     return Card(
       elevation: 3,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(compact ? 8 : 12),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(compact ? 7 : 12),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 32,
-              color: Colors.green,
-            ),
-            const SizedBox(width: 12),
+            Icon(icon, size: compact ? 22 : 32, color: Colors.green),
+            SizedBox(width: compact ? 7 : 12),
             Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 14,
+                  style: TextStyle(
+                    fontSize: compact ? 11 : 14,
                     color: Colors.grey,
                   ),
                 ),
-                const SizedBox(height: 4),
+                SizedBox(height: compact ? 1 : 4),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
                       value,
-                      style: const TextStyle(
-                        fontSize: 22,
+                      style: TextStyle(
+                        fontSize: compact ? 16 : 22,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      unit,
-                      style: const TextStyle(
-                        fontSize: 14,
-                      ),
-                    ),
+                    SizedBox(width: compact ? 2 : 4),
+                    Text(unit, style: TextStyle(fontSize: compact ? 11 : 14)),
                   ],
                 ),
               ],
