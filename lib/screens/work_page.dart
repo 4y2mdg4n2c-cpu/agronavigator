@@ -9,6 +9,7 @@ import 'package:agronavigator_app/services/coordinate_convertet.dart';
 import 'package:agronavigator_app/models/work_settings.dart';
 import 'package:agronavigator_app/map/coverage_generator.dart';
 import 'package:agronavigator_app/services/hectare_calculator.dart';
+import 'package:agronavigator_app/services/gps_position_filter.dart';
 import 'package:agronavigator_app/widgets/info_bar.dart';
 import 'package:agronavigator_app/widgets/work_controls.dart';
 import 'package:agronavigator_app/services/yield_calculator.dart';
@@ -44,6 +45,7 @@ class _WorkPageState extends State<WorkPage> {
       CoverageGenerator(); // Генератор полигона обработанной площади
   final HectareCalculator hectareCalculator = HectareCalculator();
   final YieldCalculator yieldCalculator = YieldCalculator();
+  final GpsPositionFilter gpsPositionFilter = GpsPositionFilter();
   List<XYPoint> coveragePolygon = []; // Полигон обработанной площади
   double hectares = 0; // Рассчитанная площадь в гектарах
   double gpsAccuracy = 0;
@@ -92,13 +94,26 @@ class _WorkPageState extends State<WorkPage> {
     positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
           (Position position) {
+            final filteredPosition = gpsPositionFilter.filter(position);
+
             // Обновляем данные GPS
             setState(() {
               gpsAccuracy = position.accuracy;
               gpsSpeed = position.speed;
               gpsHeading = position.heading;
-              currentLatLng = LatLng(position.latitude, position.longitude);
+              if (filteredPosition != null) {
+                currentLatLng = LatLng(
+                  filteredPosition.latitude,
+                  filteredPosition.longitude,
+                );
+              }
             });
+
+            if (filteredPosition == null) {
+              return;
+            }
+
+            final acceptedPosition = filteredPosition;
 
             // Во время подготовки GPS:
             // - показываем положение на карте;
@@ -117,13 +132,6 @@ class _WorkPageState extends State<WorkPage> {
                 print('GPS готов');
               }
 
-              return;
-            }
-
-            // После подготовки GPS
-            // отбрасываем неточные координаты.
-            if (position.accuracy > 20) {
-              print('Плохая точность: ${position.accuracy}');
               return;
             }
 
@@ -156,8 +164,8 @@ class _WorkPageState extends State<WorkPage> {
               final distance = Geolocator.distanceBetween(
                 lastRecordedPoint!.latitude,
                 lastRecordedPoint!.longitude,
-                position.latitude,
-                position.longitude,
+                acceptedPosition.latitude,
+                acceptedPosition.longitude,
               );
 
               if (distance < minDistance) {
@@ -368,7 +376,10 @@ class _WorkPageState extends State<WorkPage> {
                                   Align(
                                     alignment: Alignment.topRight,
                                     child: Padding(
-                                      padding: const EdgeInsets.only(top: 12, right: 12),
+                                      padding: const EdgeInsets.only(
+                                        top: 12,
+                                        right: 12,
+                                      ),
                                       child: GpsSignalIndicator(
                                         accuracy: gpsAccuracy,
                                         hasSignal: currentLatLng != null,
