@@ -4,39 +4,57 @@ import 'package:geolocator/geolocator.dart';
 
 class GpsPositionFilter {
   Position? lastAcceptedPosition;
+  Position? lastFilteredPosition;
 
-  /// Максимальная допустимая погрешность GPS в метрах.
+  /// Точки с большей погрешностью пока не используем.
   static const double maxAccuracy = 20;
 
-  /// Минимальный запас допустимой скорости.
+  /// Минимально допустимая скорость с запасом.
   ///
-  /// Нужен, чтобы фильтр не блокировал медленное движение комбайна,
-  /// даже если GPS показывает скорость неточно.
-  static const double minimumAllowedSpeed = 4;
+  /// 3 м/с = 10,8 км/ч.
+  /// Это не минимальная скорость техники, а предел,
+  /// который позволяет медленному движению проходить фильтр.
+  static const double minimumAllowedSpeed = 3;
 
-  /// Абсолютный предел скорости для дорожных испытаний.
-  /// 55 м/с — примерно 198 км/ч.
+  /// Запас к скорости, которую сообщает GPS.
+  static const double speedMargin = 3;
+
+  /// Максимальная скорость для дорожных испытаний.
   static const double maximumAllowedSpeed = 55;
 
-  /// Дополнительный запас к скорости, которую сообщает GPS.
-  static const double speedMargin = 4;
+  /// Небольшой запас расстояния из-за естественной погрешности GPS.
+  static const double distanceMargin = 2;
 
   Position? filter(Position newPosition) {
-    // Точки с погрешностью хуже 20 метров не принимаем.
+    // 1. Проверяем качество новой точки.
     if (!newPosition.accuracy.isFinite ||
         newPosition.accuracy <= 0 ||
         newPosition.accuracy > maxAccuracy) {
       return null;
     }
 
-    // Первая хорошая точка: сравнивать её пока не с чем.
+    // 2. Первую хорошую точку принимаем сразу.
     if (lastAcceptedPosition == null) {
       lastAcceptedPosition = newPosition;
+      lastFilteredPosition = newPosition;
       return newPosition;
     }
 
     final previousPosition = lastAcceptedPosition!;
 
+    // 3. Считаем время между последней принятой
+    // и новой GPS-точкой.
+    final elapsedMilliseconds = newPosition.timestamp
+        .difference(previousPosition.timestamp)
+        .inMilliseconds;
+
+    if (elapsedMilliseconds <= 0) {
+      return null;
+    }
+
+    final elapsedSeconds = elapsedMilliseconds / 1000;
+
+    // 4. Считаем реальное расстояние между координатами.
     final distance = Geolocator.distanceBetween(
       previousPosition.latitude,
       previousPosition.longitude,
@@ -44,45 +62,52 @@ class GpsPositionFilter {
       newPosition.longitude,
     );
 
-    final elapsedMilliseconds = newPosition.timestamp
-        .difference(previousPosition.timestamp)
-        .inMilliseconds;
-
-    // Некорректное или повторяющееся время — точку не используем.
-    if (elapsedMilliseconds <= 0) {
-      return null;
-    }
-
-    final elapsedSeconds = elapsedMilliseconds / 1000;
-
-    // Скорость, которая получилась по расстоянию между координатами.
-    final calculatedSpeed = distance / elapsedSeconds;
-
-    // Скорость GPS иногда сама ошибается, поэтому:
-    // 1. добавляем запас;
-    // 2. не опускаемся ниже 4 м/с;
-    // 3. не разрешаем больше 55 м/с.
-    final allowedSpeed = math.min(
-      maximumAllowedSpeed,
-      math.max(minimumAllowedSpeed, newPosition.speed + speedMargin),
+    // 5. Берём большую скорость из двух GPS-точек.
+    final reportedSpeed = math.max(
+      previousPosition.speed,
+      newPosition.speed,
     );
 
-    // Если между двумя обновлениями получилась физически
-    // неправдоподобная скорость, считаем новую точку скачком GPS.
-    if (calculatedSpeed > allowedSpeed) {
+    // 6. Вычисляем допустимую скорость с запасом.
+    final allowedSpeed = math.min(
+      maximumAllowedSpeed,
+      math.max(
+        minimumAllowedSpeed,
+        reportedSpeed + speedMargin,
+      ),
+    );
+
+    // 7. Вычисляем, какое расстояние можно было пройти
+    // за прошедшее время.
+    final allowedDistance =
+        allowedSpeed * elapsedSeconds + distanceMargin;
+
+    // 8. Если координата улетела слишком далеко,
+    // считаем её выбросом GPS.
+    if (distance > allowedDistance) {
       return null;
     }
 
-    final smoothingFactor = _getSmoothingFactor(newPosition.speed);
-
-    final filteredLatitude =
-        previousPosition.latitude +
-        (newPosition.latitude - previousPosition.latitude) * smoothingFactor;
-
-    final filteredLongitude =
-        previousPosition.longitude +
-        (newPosition.longitude - previousPosition.longitude) * smoothingFactor;
-
+    // 9. Точка прошла проверку.
+    // Запоминаем именно сырую принятую точку,
+    // без сглаживания и искусственного отставания.
+    final double smoothingFactor;
+    if (newPosition.accuracy <= 5) {
+      smoothingFactor = 0.85;
+    } else if (newPosition.accuracy <= 10) {
+      smoothingFactor = 0.65;
+    } else {
+      smoothingFactor = 0.45;
+    }
+    
+    final filteredLatitude = 
+        lastFilteredPosition!.latitude +
+        (newPosition.latitude - lastFilteredPosition!.latitude) *
+            smoothingFactor;
+    final filteredLongitude = 
+        lastFilteredPosition!.longitude +
+        (newPosition.longitude - lastFilteredPosition!.longitude) *
+            smoothingFactor;
     final filteredPosition = Position(
       latitude: filteredLatitude,
       longitude: filteredLongitude,
@@ -97,31 +122,14 @@ class GpsPositionFilter {
       floor: newPosition.floor,
       isMocked: newPosition.isMocked,
     );
+    lastAcceptedPosition = newPosition;
+    lastFilteredPosition = filteredPosition;
 
-    lastAcceptedPosition = filteredPosition;
     return filteredPosition;
   }
 
-  /// На малой скорости сильнее сглаживаем гуляние GPS.
-  /// На большой скорости меньше сглаживаем, чтобы карта не отставала.
-  double _getSmoothingFactor(double speed) {
-    if (speed < 1) {
-      return 0.20;
-    }
-
-    if (speed < 3) {
-      return 0.35;
-    }
-
-    if (speed < 10) {
-      return 0.55;
-    }
-
-    return 0.75;
-  }
-
-  /// Очищает память фильтра перед новой работой.
   void reset() {
     lastAcceptedPosition = null;
+    lastFilteredPosition = null;
   }
 }
