@@ -15,6 +15,7 @@ import 'package:agronavigator_app/widgets/work_controls.dart';
 import 'package:agronavigator_app/services/yield_calculator.dart';
 import 'package:agronavigator_app/widgets/navigation_canvas.dart';
 import 'package:agronavigator_app/widgets/gps_signal_indicator.dart';
+import 'package:agronavigator_app/widgets/work_action_buttons.dart';
 
 class WorkPage extends StatefulWidget {
   final WorkSettings settings;
@@ -66,6 +67,10 @@ class _WorkPageState extends State<WorkPage> {
 
   // Работа еще не началась.
   bool isWorkStarted = false;
+  // Пользователь нажал кнопку "Старт"
+  bool hasStarted = false;
+  // Работа временно приостановлена.
+  bool isPaused = false;
 
   // Точка начала движения после подготовки GPS.
   LatLng? startMovementPoint;
@@ -134,7 +139,12 @@ class _WorkPageState extends State<WorkPage> {
 
               return;
             }
-
+            if (!hasStarted) {
+              return;
+            }
+            if (isPaused) {
+              return;
+            }
             // Ждем первые 10 метров движения.
             if (!isWorkStarted) {
               startMovementPoint ??= currentLatLng;
@@ -225,6 +235,20 @@ class _WorkPageState extends State<WorkPage> {
       }
     });
   }
+  void _startWork() {
+    setState(() {
+      hasStarted = true;
+      isPaused = false;
+      isWorkStarted = false;
+      startMovementPoint = currentLatLng;
+    });
+  }
+  void _pauseResumeWork() {
+    setState(() {
+      isPaused = !isPaused;
+    });
+  }
+
 
   // Основной экран навигации.
   // Содержит:
@@ -358,6 +382,15 @@ class _WorkPageState extends State<WorkPage> {
                                         onBunker: controls.onBunker,
                                         compact: true,
                                       ),
+                                      const SizedBox(height: 6),
+                                      if (!isGpsInitializing)
+                                      WorkActionButtons(
+                                        onStart: _startWork,
+                                        onPauseResume: _pauseResumeWork,
+                                        onStop: () {},
+                                        isPaused: isPaused,
+                                        hasStarted: hasStarted,
+                                      ),
                                       const SizedBox(height: 10),
                                       GpsSignalIndicator(
                                         accuracy: gpsAccuracy,
@@ -390,6 +423,16 @@ class _WorkPageState extends State<WorkPage> {
                                     alignment: Alignment.bottomRight,
                                     child: controls,
                                   ),
+                                  Align(
+                                    alignment: Alignment.bottomLeft,
+                                    child: !isGpsInitializing ? WorkActionButtons(
+                                      onStart: _startWork,
+                                      onPauseResume: _pauseResumeWork,
+                                      onStop: () {},
+                                      isPaused: isPaused,
+                                      hasStarted: hasStarted,
+                                    ) : const SizedBox.shrink(),
+                                  )
                                 ],
                               ),
                       );

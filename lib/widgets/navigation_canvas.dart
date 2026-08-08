@@ -33,6 +33,7 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
 
   double _scale = 1.0;
   Offset _viewOffset = Offset.zero;
+  double? _smoothHeading;
 
   double _scaleAtGestureStart = 1.0;
   Offset _viewOffsetAtGestureStart = Offset.zero;
@@ -77,8 +78,29 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
     });
   }
 
+  double _filterHeading(double newHeading) {
+    if (!newHeading.isFinite || newHeading < 0) {
+      return _smoothHeading ?? newHeading;
+    }
+
+    final normalizedHeading = newHeading % 360;
+    if (_smoothHeading == null) {
+      return _smoothHeading = normalizedHeading;
+    }
+
+    final difference = (normalizedHeading - _smoothHeading! + 540) % 360 - 180;
+    if (difference.abs() < 5) {
+      return _smoothHeading!;
+    }
+
+    _smoothHeading = (_smoothHeading! + difference * 0.25 + 360) % 360;
+    return _smoothHeading!;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final displayHeading = _filterHeading(widget.gpsHeading);
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onScaleStart: _handleScaleStart,
@@ -93,7 +115,7 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
               guidanceLines: widget.guidanceLines,
               coveragePolygon: widget.coveragePolygon,
               currentPoint: widget.currentPoint,
-              gpsHeading: widget.gpsHeading,
+              gpsHeading: displayHeading,
               rotateWithGpsHeading: widget.rotateWithGpsHeading,
               scale: _scale,
               viewOffset: _viewOffset,
