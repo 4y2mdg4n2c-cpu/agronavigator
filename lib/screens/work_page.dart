@@ -47,7 +47,7 @@ class _WorkPageState extends State<WorkPage> {
   final HectareCalculator hectareCalculator = HectareCalculator();
   final YieldCalculator yieldCalculator = YieldCalculator();
   final GpsPositionFilter gpsPositionFilter = GpsPositionFilter();
-  List<XYPoint> coveragePolygon = []; // Полигон обработанной площади
+  List<List<XYPoint>> coveragePolygons = []; // Полигоны обработанной площади
   double hectares = 0; // Рассчитанная площадь в гектарах
   double gpsAccuracy = 0;
   double gpsSpeed = 0;
@@ -119,6 +119,16 @@ class _WorkPageState extends State<WorkPage> {
             }
 
             final acceptedPosition = filteredPosition;
+
+            if (origin != null) {
+              final currentPoint = CoordinateConverter.latLngToXY(
+                currentLatLng!,
+                origin!,
+              );
+              setState(() {
+                currentXYPoint = currentPoint;
+              });
+            }
 
             // Во время подготовки GPS:
             // - показываем положение на карте;
@@ -194,14 +204,17 @@ class _WorkPageState extends State<WorkPage> {
               origin!,
             );
 
-            currentXYPoint = xyPoint;
-
             setState(() {
+              currentXYPoint = xyPoint;
               coverage.addPoint(xyPoint);
 
-              coveragePolygon = coverage.generatePolygon(workingWidth);
+              coveragePolygons = coverage.generatePolygons(workingWidth);
 
-              hectares = hectareCalculator.calculate(coveragePolygon);
+              hectares = coveragePolygons.fold(
+                0,
+                (total, polygon) =>
+                    total + hectareCalculator.calculate(polygon),
+              );
 
               if (isRecording) {
                 referenceTrack.add(xyPoint);
@@ -235,6 +248,7 @@ class _WorkPageState extends State<WorkPage> {
       }
     });
   }
+
   void _startWork() {
     setState(() {
       hasStarted = true;
@@ -243,12 +257,21 @@ class _WorkPageState extends State<WorkPage> {
       startMovementPoint = currentLatLng;
     });
   }
+
   void _pauseResumeWork() {
     setState(() {
-      isPaused = !isPaused;
+      if (isPaused) {
+        isPaused = false;
+        lastRecordedPoint = currentLatLng;
+        coverage.startNewSegment();
+        if (currentXYPoint != null) {
+          coverage.addPoint(currentXYPoint!);
+        }
+      } else {
+        isPaused = true;
+      }
     });
   }
-
 
   // Основной экран навигации.
   // Содержит:
@@ -305,7 +328,7 @@ class _WorkPageState extends State<WorkPage> {
                 NavigationCanvas(
                   firstPass: referenceTrack,
                   guidanceLines: guidanceLines,
-                  coveragePolygon: coveragePolygon,
+                  coveragePolygons: coveragePolygons,
                   currentPoint: currentXYPoint,
                   gpsHeading: gpsHeading,
                   rotateWithGpsHeading: true,
@@ -384,13 +407,13 @@ class _WorkPageState extends State<WorkPage> {
                                       ),
                                       const SizedBox(height: 6),
                                       if (!isGpsInitializing)
-                                      WorkActionButtons(
-                                        onStart: _startWork,
-                                        onPauseResume: _pauseResumeWork,
-                                        onStop: () {},
-                                        isPaused: isPaused,
-                                        hasStarted: hasStarted,
-                                      ),
+                                        WorkActionButtons(
+                                          onStart: _startWork,
+                                          onPauseResume: _pauseResumeWork,
+                                          onStop: () {},
+                                          isPaused: isPaused,
+                                          hasStarted: hasStarted,
+                                        ),
                                       const SizedBox(height: 10),
                                       GpsSignalIndicator(
                                         accuracy: gpsAccuracy,
@@ -425,14 +448,16 @@ class _WorkPageState extends State<WorkPage> {
                                   ),
                                   Align(
                                     alignment: Alignment.bottomLeft,
-                                    child: !isGpsInitializing ? WorkActionButtons(
-                                      onStart: _startWork,
-                                      onPauseResume: _pauseResumeWork,
-                                      onStop: () {},
-                                      isPaused: isPaused,
-                                      hasStarted: hasStarted,
-                                    ) : const SizedBox.shrink(),
-                                  )
+                                    child: !isGpsInitializing
+                                        ? WorkActionButtons(
+                                            onStart: _startWork,
+                                            onPauseResume: _pauseResumeWork,
+                                            onStop: () {},
+                                            isPaused: isPaused,
+                                            hasStarted: hasStarted,
+                                          )
+                                        : const SizedBox.shrink(),
+                                  ),
                                 ],
                               ),
                       );

@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 class NavigationPainter extends CustomPainter {
   final List<XYPoint> firstPass;
   final List<List<XYPoint>> guidanceLines;
-  final List<XYPoint> coveragePolygon;
+  final List<List<XYPoint>> coveragePolygons;
   final XYPoint? currentPoint;
   final double gpsHeading;
   final double scale;
@@ -21,7 +21,7 @@ class NavigationPainter extends CustomPainter {
   NavigationPainter({
     required this.firstPass,
     required this.guidanceLines,
-    required this.coveragePolygon,
+    required this.coveragePolygons,
     required this.currentPoint,
     required this.scale,
     required this.viewOffset,
@@ -90,7 +90,9 @@ class NavigationPainter extends CustomPainter {
     final center = currentPoint ?? const XYPoint(x: 0, y: 0);
     canvas.translate(-center.x, -center.y);
 
-    _drawPolygon(canvas, coveragePolygon, coveragePaint, coverageBorderPaint);
+    for (final polygon in coveragePolygons) {
+      _drawPolygon(canvas, polygon, coveragePaint, coverageBorderPaint);
+    }
     for (final line in guidanceLines) {
       _drawLine(canvas, line, guidancePaint);
     }

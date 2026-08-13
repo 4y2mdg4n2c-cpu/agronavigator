@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:agronavigator_app/screens/work_page.dart';
 import 'package:agronavigator_app/models/work_settings.dart';
 import 'package:agronavigator_app/models/work_type.dart';
+import 'package:agronavigator_app/database/database_helper.dart';
 class HarvestPage extends StatefulWidget {
   const HarvestPage({super.key});
 
@@ -12,11 +13,13 @@ class HarvestPage extends StatefulWidget {
 class _HarvestPageState extends State<HarvestPage> {
   final TextEditingController widthController = TextEditingController();
   final TextEditingController bunkerController = TextEditingController();
+  final TextEditingController fieldNameController = TextEditingController();
 
   @override
   void dispose() {
     widthController.dispose();
     bunkerController.dispose();
+    fieldNameController.dispose();
     super.dispose();
 }
 
@@ -79,6 +82,38 @@ class _HarvestPageState extends State<HarvestPage> {
               },
               child: const Text('Начать работу')
             ),
+            ElevatedButton(
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) {
+                    return AlertDialog(
+                      title: const Text('Создать поле'),
+                      content: TextField(
+                        controller: fieldNameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Название поля',
+                          border: OutlineInputBorder(),
+                        )
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () async {
+                            await DatabaseHelper.instance.createField(
+                              fieldNameController.text,
+                            );
+                            Navigator.pop(context);
+                          },
+                          child: const Text('Создать'),
+                        )
+                      ]
+                    );
+                  },
+                );
+              },
+              child: const Text('Создать поле')
+            ),
+            const SizedBox(height: 15),
             
             
           ],

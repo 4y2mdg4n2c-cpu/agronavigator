@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 class NavigationCanvas extends StatefulWidget {
   final List<XYPoint> firstPass;
   final List<List<XYPoint>> guidanceLines;
-  final List<XYPoint> coveragePolygon;
+  final List<List<XYPoint>> coveragePolygons;
   final XYPoint? currentPoint;
   final double gpsHeading;
 
@@ -16,7 +16,7 @@ class NavigationCanvas extends StatefulWidget {
     super.key,
     required this.firstPass,
     required this.guidanceLines,
-    required this.coveragePolygon,
+    required this.coveragePolygons,
     required this.currentPoint,
     this.gpsHeading = -1,
     this.rotateWithGpsHeading = false,
@@ -113,7 +113,7 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
             painter: NavigationPainter(
               firstPass: widget.firstPass,
               guidanceLines: widget.guidanceLines,
-              coveragePolygon: widget.coveragePolygon,
+              coveragePolygons: widget.coveragePolygons,
               currentPoint: widget.currentPoint,
               gpsHeading: displayHeading,
               rotateWithGpsHeading: widget.rotateWithGpsHeading,
