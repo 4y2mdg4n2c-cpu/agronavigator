@@ -16,10 +16,14 @@ import 'package:agronavigator_app/services/yield_calculator.dart';
 import 'package:agronavigator_app/widgets/navigation_canvas.dart';
 import 'package:agronavigator_app/widgets/gps_signal_indicator.dart';
 import 'package:agronavigator_app/widgets/work_action_buttons.dart';
+import 'package:agronavigator_app/widgets/work_statistics_button.dart';
+import 'package:agronavigator_app/widgets/work_statistics_panel.dart';
+import 'package:agronavigator_app/database/database_helper.dart';
 
 class WorkPage extends StatefulWidget {
   final WorkSettings settings;
-  const WorkPage({super.key, required this.settings});
+  final int? fieldId;
+  const WorkPage({super.key, required this.settings, this.fieldId});
 
   @override
   State<WorkPage> createState() => _WorkPageState();
@@ -29,6 +33,7 @@ class _WorkPageState extends State<WorkPage> {
   // Настройки работы
   double get workingWidth => widget.settings.workingWidth;
   double? get bunkerWeight => widget.settings.bunkerWeight;
+  int? get fieldId => widget.fieldId;
   // GPS
   LatLng? currentLatLng; // Последняя полученная GPS точка
   LatLng? lastRecordedPoint; // Последняя координата, записанная в рабочий трек
@@ -49,6 +54,8 @@ class _WorkPageState extends State<WorkPage> {
   final GpsPositionFilter gpsPositionFilter = GpsPositionFilter();
   List<List<XYPoint>> coveragePolygons = []; // Полигоны обработанной площади
   double hectares = 0; // Рассчитанная площадь в гектарах
+  double sessionStartHectares = 0; // Площадь на момент последнего старта
+  double get sessionHectares => hectares - sessionStartHectares;
   double gpsAccuracy = 0;
   double gpsSpeed = 0;
   double gpsHeading = -1;
@@ -58,6 +65,7 @@ class _WorkPageState extends State<WorkPage> {
 
   // Расстояние, пройденное с начала заполнения бункера.
   double bunkerDistance = 0;
+  double workDistance = 0; // Общее расстояние за день (не обнуляется)
 
   // Текущая урожайность, ц/га.
   double yieldValue = 0;
@@ -71,6 +79,16 @@ class _WorkPageState extends State<WorkPage> {
   bool hasStarted = false;
   // Работа временно приостановлена.
   bool isPaused = false;
+  // Работа завершена кнопкой "Стоп"
+  bool isWorkFinished = false;
+  bool isStatisticsVisible = false;
+  bool isCurrentSessionSaved = false;
+  int currentSessionNumber = 0;
+  String fieldName = 'Работа без сохранения';
+  double savedFieldArea = 0;
+
+  double get totalFieldArea =>
+      savedFieldArea + (isCurrentSessionSaved ? 0 : sessionHectares);
 
   // Точка начала движения после подготовки GPS.
   LatLng? startMovementPoint;
@@ -193,6 +211,7 @@ class _WorkPageState extends State<WorkPage> {
               }
 
               bunkerDistance += distance;
+              workDistance += distance;
             }
 
             lastRecordedPoint = currentLatLng;
@@ -227,8 +246,26 @@ class _WorkPageState extends State<WorkPage> {
   @override
   void initState() {
     super.initState();
+    _loadFieldStatistics();
     _getLocation();
     startGpsInitialization();
+  }
+
+  Future<void> _loadFieldStatistics() async {
+    if (fieldId == null) {
+      return;
+    }
+    final results = await Future.wait([
+      DatabaseHelper.instance.getFieldName(fieldId!),
+      DatabaseHelper.instance.getSavedAreaForField(fieldId!),
+    ]);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      fieldName = results[0] as String? ?? 'Поле не найдено';
+      savedFieldArea = results[1] as double;
+    });
   }
 
   void startGpsInitialization() {
@@ -249,8 +286,53 @@ class _WorkPageState extends State<WorkPage> {
     });
   }
 
+  Future<void> _stopWork() async {
+    final completedArea = sessionHectares;
+    final completedDistance = workDistance;
+    final stoppedSessionNumber = currentSessionNumber;
+
+    setState(() {
+      isWorkFinished = true;
+      hasStarted = false;
+      isPaused = false;
+      isWorkStarted = false;
+      isRecording = false;
+    });
+
+    if (fieldId != null) {
+      await DatabaseHelper.instance.createWork(
+        fieldId: fieldId!,
+        area: completedArea,
+        distance: completedDistance,
+        workingWidth: workingWidth,
+      );
+      final updatedSavedArea = await DatabaseHelper.instance
+          .getSavedAreaForField(fieldId!);
+      if (mounted) {
+        setState(() {
+          savedFieldArea = updatedSavedArea;
+          if (currentSessionNumber == stoppedSessionNumber) {
+            isCurrentSessionSaved = true;
+          }
+        });
+      }
+    }
+  }
+
   void _startWork() {
     setState(() {
+      sessionStartHectares = hectares;
+      isCurrentSessionSaved = false;
+      currentSessionNumber++;
+      if (isWorkFinished) {
+        workDistance = 0;
+        bunkerDistance = 0;
+        yieldValue = 0;
+        coverage.startNewSegment();
+        lastRecordedPoint = null;
+        isRecording = false;
+        isWorkFinished = false;
+      }
       hasStarted = true;
       isPaused = false;
       isWorkStarted = false;
@@ -282,7 +364,7 @@ class _WorkPageState extends State<WorkPage> {
   @override
   Widget build(BuildContext context) {
     final infoBar = InfoBar(
-      area: hectares,
+      area: sessionHectares,
       speed: gpsSpeed * 3.6,
       gpsAccuracy: gpsAccuracy,
       yieldValue: yieldValue,
@@ -391,7 +473,7 @@ class _WorkPageState extends State<WorkPage> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       InfoBar(
-                                        area: hectares,
+                                        area: sessionHectares,
                                         speed: gpsSpeed * 3.6,
                                         gpsAccuracy: gpsAccuracy,
                                         yieldValue: yieldValue,
@@ -410,7 +492,7 @@ class _WorkPageState extends State<WorkPage> {
                                         WorkActionButtons(
                                           onStart: _startWork,
                                           onPauseResume: _pauseResumeWork,
-                                          onStop: () {},
+                                          onStop: _stopWork,
                                           isPaused: isPaused,
                                           hasStarted: hasStarted,
                                         ),
@@ -452,7 +534,7 @@ class _WorkPageState extends State<WorkPage> {
                                         ? WorkActionButtons(
                                             onStart: _startWork,
                                             onPauseResume: _pauseResumeWork,
-                                            onStop: () {},
+                                            onStop: _stopWork,
                                             isPaused: isPaused,
                                             hasStarted: hasStarted,
                                           )
@@ -462,6 +544,52 @@ class _WorkPageState extends State<WorkPage> {
                               ),
                       );
                     },
+                  ),
+                ),
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: EdgeInsets.only(
+                        top:
+                            MediaQuery.orientationOf(context) ==
+                                Orientation.landscape
+                            ? 64
+                            : 8,
+                        right: 8,
+                        left: 8,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          WorkStatisticsButton(
+                            isPanelVisible: isStatisticsVisible,
+                            onPressed: () {
+                              setState(() {
+                                isStatisticsVisible = !isStatisticsVisible;
+                              });
+                            },
+                          ),
+                          if (isStatisticsVisible) ...[
+                            const SizedBox(height: 6),
+                            WorkStatisticsPanel(
+                              fieldName: fieldName,
+                              sessionArea: sessionHectares,
+                              totalFieldArea: totalFieldArea,
+                              sessionDistance: workDistance,
+                              workingWidth: workingWidth,
+                              yieldValue: yieldValue,
+                              onClose: () {
+                                setState(() {
+                                  isStatisticsVisible = false;
+                                });
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],

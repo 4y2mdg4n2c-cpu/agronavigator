@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:agronavigator_app/screens/work_page.dart';
 import 'package:agronavigator_app/models/work_settings.dart';
 import 'package:agronavigator_app/models/work_type.dart';
-import 'package:agronavigator_app/database/database_helper.dart';
+import 'package:agronavigator_app/widgets/field_selector.dart';
 class HarvestPage extends StatefulWidget {
   const HarvestPage({super.key});
 
@@ -13,13 +13,12 @@ class HarvestPage extends StatefulWidget {
 class _HarvestPageState extends State<HarvestPage> {
   final TextEditingController widthController = TextEditingController();
   final TextEditingController bunkerController = TextEditingController();
-  final TextEditingController fieldNameController = TextEditingController();
+  int? selectedFieldId;
 
   @override
   void dispose() {
     widthController.dispose();
     bunkerController.dispose();
-    fieldNameController.dispose();
     super.dispose();
 }
 
@@ -64,8 +63,48 @@ class _HarvestPageState extends State<HarvestPage> {
               )
             ),
             const SizedBox(height: 25),
+            FieldSelector(
+              onFieldSelected: (fieldId) {
+                setState(() {
+                  selectedFieldId = fieldId;
+                });
+              }
+            ),
+            const SizedBox(height: 15),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
+                if (selectedFieldId == null) {
+                  final shouldContinue = await showDialog<bool>(
+                    context: context,
+                    builder: (context) {
+                      return AlertDialog(
+                        title: const Text('Работа без сохранения'),
+                        content: const Text(
+                          'Вы начинаете работу без сохранения данных. '
+                          'Чтобы данные сохранялись, создайте новое поле '
+                          'или выберите существующее.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(context, false);
+                            },
+                            child: const Text('Назад'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(context, true);
+                            },
+                            child: const Text('Продолжить'),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                  if (shouldContinue != true) {
+                    return;
+                  }
+                }
                 final settings = WorkSettings(
                   workType: WorkType.harvest,
                   workingWidth: double.parse(widthController.text),
@@ -76,46 +115,13 @@ class _HarvestPageState extends State<HarvestPage> {
                   MaterialPageRoute(
                     builder: (context) => WorkPage(
                       settings: settings,
+                      fieldId: selectedFieldId,
                     ),
                   ),
                 );
               },
               child: const Text('Начать работу')
-            ),
-            ElevatedButton(
-              onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (context) {
-                    return AlertDialog(
-                      title: const Text('Создать поле'),
-                      content: TextField(
-                        controller: fieldNameController,
-                        decoration: const InputDecoration(
-                          labelText: 'Название поля',
-                          border: OutlineInputBorder(),
-                        )
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () async {
-                            await DatabaseHelper.instance.createField(
-                              fieldNameController.text,
-                            );
-                            Navigator.pop(context);
-                          },
-                          child: const Text('Создать'),
-                        )
-                      ]
-                    );
-                  },
-                );
-              },
-              child: const Text('Создать поле')
-            ),
-            const SizedBox(height: 15),
-            
-            
+            ), 
           ],
         ),
       ),
