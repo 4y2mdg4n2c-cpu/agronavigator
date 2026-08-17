@@ -21,6 +21,16 @@ class CoverageGenerator {
       ..add([]);
   }
 
+  void loadTracks(List<List<XYPoint>> savedTracks) {
+    tracks
+      ..clear()
+      ..addAll(savedTracks);
+
+    if (tracks.isEmpty) {
+      tracks.add([]);
+    }
+  }
+
   List<List<XYPoint>> generatePolygons(double workingWidth) {
     return tracks
         .map((track) => _generatePolygon(track, workingWidth))

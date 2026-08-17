@@ -45,6 +45,9 @@ class _WorkPageState extends State<WorkPage> {
   // Начало локальной системы координат
   // Устанавливается один раз после начала работы и больше не изменяется
   LatLng? origin;
+  late final Future<void> fieldOriginLoadFuture;
+  late final Future<void> fieldCoverageLoadFuture;
+  bool shouldStartNewCoverageSegment = false;
   List<XYPoint> referenceTrack = []; // Опорный проход, записанный пользователем
   List<List<XYPoint>> guidanceLines = []; // Построенные параллельные линии
   final CoverageGenerator coverage =
@@ -84,6 +87,7 @@ class _WorkPageState extends State<WorkPage> {
   bool isStatisticsVisible = false;
   bool isCurrentSessionSaved = false;
   int currentSessionNumber = 0;
+  int sessionStartTrackIndex = 0;
   String fieldName = 'Работа без сохранения';
   double savedFieldArea = 0;
 
@@ -116,7 +120,7 @@ class _WorkPageState extends State<WorkPage> {
 
     positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-          (Position position) {
+          (Position position) async {
             final filteredPosition = gpsPositionFilter.filter(position);
 
             // Обновляем данные GPS
@@ -188,9 +192,20 @@ class _WorkPageState extends State<WorkPage> {
                 return;
               }
 
+              await fieldOriginLoadFuture;
+
               isWorkStarted = true;
 
-              origin = currentLatLng;
+              if (fieldId == null) {
+                origin ??= currentLatLng;
+              } else if (origin == null) {
+                origin = currentLatLng;
+                await DatabaseHelper.instance.saveFieldOrigin(
+                  fieldId!,
+                  origin!.latitude,
+                  origin!.longitude,
+                );
+              }
               lastRecordedPoint = currentLatLng;
 
               print('Работа началась');
@@ -216,7 +231,9 @@ class _WorkPageState extends State<WorkPage> {
 
             lastRecordedPoint = currentLatLng;
 
-            origin ??= currentLatLng;
+            if (fieldId == null) {
+              origin ??= currentLatLng;
+            }
 
             final xyPoint = CoordinateConverter.latLngToXY(
               currentLatLng!,
@@ -246,9 +263,58 @@ class _WorkPageState extends State<WorkPage> {
   @override
   void initState() {
     super.initState();
+    fieldOriginLoadFuture = _loadFieldOrigin();
+    fieldCoverageLoadFuture = _loadFieldCoverage();
     _loadFieldStatistics();
     _getLocation();
     startGpsInitialization();
+  }
+
+  Future<void> _loadFieldOrigin() async {
+    if (fieldId == null) {
+      return;
+    }
+    final savedOrigin = await DatabaseHelper.instance.getFieldOrigin(fieldId!);
+    if (!mounted || savedOrigin == null) {
+      return;
+    }
+    setState(() {
+      origin = LatLng(
+        savedOrigin['latitude']!,
+        savedOrigin['longitude']!,
+      );
+    });
+  }
+
+  Future<void> _loadFieldCoverage() async {
+    if (fieldId == null) {
+      return;
+    }
+    await fieldOriginLoadFuture;
+
+    final workIds = await DatabaseHelper.instance.getWorkIdsForField(fieldId!);
+    final allTracks = <List<XYPoint>>[];
+    for (final workId in workIds) {
+      final workTracks = await DatabaseHelper.instance.getWorkPoints(workId);
+      allTracks.addAll(workTracks);
+    }
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      coverage.loadTracks(allTracks);
+      coveragePolygons = coverage.generatePolygons(workingWidth);
+      hectares = coveragePolygons.fold(
+        0,
+        (total, polygon) =>
+            total + hectareCalculator.calculate(polygon),
+      );
+      sessionStartHectares = hectares;
+      shouldStartNewCoverageSegment = allTracks.any(
+        (segment) => segment.isNotEmpty,
+      );
+    });
   }
 
   Future<void> _loadFieldStatistics() async {
@@ -300,11 +366,16 @@ class _WorkPageState extends State<WorkPage> {
     });
 
     if (fieldId != null) {
-      await DatabaseHelper.instance.createWork(
+      final sessionTracks = coverage.tracks.sublist(sessionStartTrackIndex);
+      final workId = await DatabaseHelper.instance.createWork(
         fieldId: fieldId!,
         area: completedArea,
         distance: completedDistance,
         workingWidth: workingWidth,
+      );
+      await DatabaseHelper.instance.saveWorkPoints(
+        workId,
+        sessionTracks,
       );
       final updatedSavedArea = await DatabaseHelper.instance
           .getSavedAreaForField(fieldId!);
@@ -319,7 +390,11 @@ class _WorkPageState extends State<WorkPage> {
     }
   }
 
-  void _startWork() {
+  Future<void> _startWork() async {
+    await fieldCoverageLoadFuture;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       sessionStartHectares = hectares;
       isCurrentSessionSaved = false;
@@ -333,6 +408,11 @@ class _WorkPageState extends State<WorkPage> {
         isRecording = false;
         isWorkFinished = false;
       }
+      if (shouldStartNewCoverageSegment) {
+        coverage.startNewSegment();
+        shouldStartNewCoverageSegment = false;
+      }
+      sessionStartTrackIndex = coverage.tracks.length - 1;
       hasStarted = true;
       isPaused = false;
       isWorkStarted = false;
