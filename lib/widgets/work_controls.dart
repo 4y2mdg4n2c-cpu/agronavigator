@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
-/// Виджет с кнопками управления рабочим процессом.
+/// Виджет с кнопками записи опорного прохода.
 /// Отображает две плавающие кнопки:
 /// - ▶ Начать проход;
 /// - ■ Завершить проход.
+/// При необходимости может дополнительно показать кнопку заполнения бункера.
 /// Сам виджет не содержит логики работы.
 /// При нажатии вызывает переданные функции:
 /// [onStart] — запуск записи прохода;
@@ -14,14 +15,13 @@ class WorkControls extends StatelessWidget {
   /// Создает панель управления проходом.
   /// Требует две функции:
   /// [onStart] и [onStop].
-  // Вызывается при заполнении полного бункера.
-  final VoidCallback onBunker;
+  final VoidCallback? onBunker; // Вызывается при заполнении полного бункера.
   final bool compact;
   const WorkControls({
     super.key,
     required this.onStart,
     required this.onStop,
-    required this.onBunker,
+    this.onBunker,
     this.compact = false,
   });
 
@@ -45,14 +45,16 @@ class WorkControls extends StatelessWidget {
           onPressed: onStop,
           icon: Icons.stop,
         ),
-        SizedBox(height: compact ? 6 : 12),
-        _ControlButton(
-          heroTag: 'bunker',
-          compact: compact,
-          backgroundColor: Colors.yellow.withValues(alpha: 0.8),
-          onPressed: onBunker,
-          icon: Icons.agriculture,
-        ),
+        if (onBunker != null) ...[
+          SizedBox(height: compact ? 6 : 12),
+          _ControlButton(
+            heroTag: 'bunker',
+            compact: compact,
+            backgroundColor: Colors.yellow.withValues(alpha: 0.8),
+            onPressed: onBunker!,
+            icon: Icons.agriculture,
+          ),
+        ],
       ],
     );
   }

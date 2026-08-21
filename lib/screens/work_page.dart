@@ -7,18 +7,20 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:agronavigator_app/services/coordinate_convertet.dart';
 import 'package:agronavigator_app/models/work_settings.dart';
+import 'package:agronavigator_app/models/work_type.dart';
 import 'package:agronavigator_app/map/coverage_generator.dart';
 import 'package:agronavigator_app/services/hectare_calculator.dart';
 import 'package:agronavigator_app/services/gps_position_filter.dart';
-import 'package:agronavigator_app/widgets/info_bar.dart';
-import 'package:agronavigator_app/widgets/work_controls.dart';
 import 'package:agronavigator_app/services/yield_calculator.dart';
 import 'package:agronavigator_app/widgets/navigation_canvas.dart';
-import 'package:agronavigator_app/widgets/gps_signal_indicator.dart';
-import 'package:agronavigator_app/widgets/work_action_buttons.dart';
+import 'package:agronavigator_app/widgets/work_controls.dart';
 import 'package:agronavigator_app/widgets/work_statistics_button.dart';
 import 'package:agronavigator_app/widgets/work_statistics_panel.dart';
+import 'package:agronavigator_app/widgets/work_screen/work_bottom_panel.dart';
+import 'package:agronavigator_app/widgets/work_screen/work_side_panel.dart';
+import 'package:agronavigator_app/widgets/work_screen/work_top_panel.dart';
 import 'package:agronavigator_app/database/database_helper.dart';
+import 'package:agronavigator_app/controllers/work_session_controller.dart';
 
 class WorkPage extends StatefulWidget {
   final WorkSettings settings;
@@ -30,9 +32,12 @@ class WorkPage extends StatefulWidget {
 }
 
 class _WorkPageState extends State<WorkPage> {
+  final WorkSessionController workSessionController = WorkSessionController();
+
   // Настройки работы
   double get workingWidth => widget.settings.workingWidth;
   double? get bunkerWeight => widget.settings.bunkerWeight;
+  bool get isHarvest => widget.settings.workType == WorkType.harvest;
   int? get fieldId => widget.fieldId;
   // GPS
   LatLng? currentLatLng; // Последняя полученная GPS точка
@@ -53,7 +58,7 @@ class _WorkPageState extends State<WorkPage> {
   final CoverageGenerator coverage =
       CoverageGenerator(); // Генератор полигона обработанной площади
   final HectareCalculator hectareCalculator = HectareCalculator();
-  final YieldCalculator yieldCalculator = YieldCalculator();
+  late final YieldCalculator? yieldCalculator;
   final GpsPositionFilter gpsPositionFilter = GpsPositionFilter();
   List<List<XYPoint>> coveragePolygons = []; // Полигоны обработанной площади
   double hectares = 0; // Рассчитанная площадь в гектарах
@@ -76,23 +81,20 @@ class _WorkPageState extends State<WorkPage> {
   // Идет подготовка GPS.
   bool isGpsInitializing = true;
 
-  // Работа еще не началась.
+  // Рабочие расчеты еще не начались.
   bool isWorkStarted = false;
-  // Пользователь нажал кнопку "Старт"
-  bool hasStarted = false;
-  // Работа временно приостановлена.
-  bool isPaused = false;
-  // Работа завершена кнопкой "Стоп"
-  bool isWorkFinished = false;
   bool isStatisticsVisible = false;
-  bool isCurrentSessionSaved = false;
   int currentSessionNumber = 0;
   int sessionStartTrackIndex = 0;
+  List<List<XYPoint>> sessionStartCoveragePolygons = [];
+  List<XYPoint> sessionStartReferenceTrack = [];
+  List<List<XYPoint>> sessionStartGuidanceLines = [];
   String fieldName = 'Работа без сохранения';
   double savedFieldArea = 0;
 
   double get totalFieldArea =>
-      savedFieldArea + (isCurrentSessionSaved ? 0 : sessionHectares);
+      savedFieldArea +
+      (workSessionController.isSaveConfirmed ? 0 : sessionHectares);
 
   // Точка начала движения после подготовки GPS.
   LatLng? startMovementPoint;
@@ -171,10 +173,7 @@ class _WorkPageState extends State<WorkPage> {
 
               return;
             }
-            if (!hasStarted) {
-              return;
-            }
-            if (isPaused) {
+            if (workSessionController.status != WorkSessionStatus.running) {
               return;
             }
             // Ждем первые 10 метров движения.
@@ -225,7 +224,9 @@ class _WorkPageState extends State<WorkPage> {
                 return;
               }
 
-              bunkerDistance += distance;
+              if (isHarvest) {
+                bunkerDistance += distance;
+              }
               workDistance += distance;
             }
 
@@ -263,6 +264,7 @@ class _WorkPageState extends State<WorkPage> {
   @override
   void initState() {
     super.initState();
+    yieldCalculator = isHarvest ? YieldCalculator() : null;
     fieldOriginLoadFuture = _loadFieldOrigin();
     fieldCoverageLoadFuture = _loadFieldCoverage();
     _loadFieldStatistics();
@@ -279,10 +281,7 @@ class _WorkPageState extends State<WorkPage> {
       return;
     }
     setState(() {
-      origin = LatLng(
-        savedOrigin['latitude']!,
-        savedOrigin['longitude']!,
-      );
+      origin = LatLng(savedOrigin['latitude']!, savedOrigin['longitude']!);
     });
   }
 
@@ -307,8 +306,7 @@ class _WorkPageState extends State<WorkPage> {
       coveragePolygons = coverage.generatePolygons(workingWidth);
       hectares = coveragePolygons.fold(
         0,
-        (total, polygon) =>
-            total + hectareCalculator.calculate(polygon),
+        (total, polygon) => total + hectareCalculator.calculate(polygon),
       );
       sessionStartHectares = hectares;
       shouldStartNewCoverageSegment = allTracks.any(
@@ -353,85 +351,176 @@ class _WorkPageState extends State<WorkPage> {
   }
 
   Future<void> _stopWork() async {
+    if (!workSessionController.stop()) {
+      return;
+    }
+
     final completedArea = sessionHectares;
     final completedDistance = workDistance;
-    final stoppedSessionNumber = currentSessionNumber;
 
     setState(() {
-      isWorkFinished = true;
-      hasStarted = false;
-      isPaused = false;
       isWorkStarted = false;
       isRecording = false;
     });
 
-    if (fieldId != null) {
-      final sessionTracks = coverage.tracks.sublist(sessionStartTrackIndex);
-      final workId = await DatabaseHelper.instance.createWork(
-        fieldId: fieldId!,
-        area: completedArea,
-        distance: completedDistance,
-        workingWidth: workingWidth,
-      );
-      await DatabaseHelper.instance.saveWorkPoints(
-        workId,
-        sessionTracks,
-      );
-      final updatedSavedArea = await DatabaseHelper.instance
-          .getSavedAreaForField(fieldId!);
-      if (mounted) {
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Сохранить текущую сессию?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Нет'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Да'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (shouldSave == true) {
+      if (fieldId != null) {
+        final sessionTracks = coverage.tracks.sublist(sessionStartTrackIndex);
+        final workId = await DatabaseHelper.instance.createWork(
+          fieldId: fieldId!,
+          area: completedArea,
+          distance: completedDistance,
+          workingWidth: workingWidth,
+        );
+        await DatabaseHelper.instance.saveWorkPoints(workId, sessionTracks);
+        final updatedSavedArea = await DatabaseHelper.instance
+            .getSavedAreaForField(fieldId!);
+        if (!mounted) {
+          return;
+        }
         setState(() {
           savedFieldArea = updatedSavedArea;
-          if (currentSessionNumber == stoppedSessionNumber) {
-            isCurrentSessionSaved = true;
-          }
         });
       }
+
+      workSessionController.confirmSaved();
+      workSessionController.prepareForNextSession();
+      setState(() {});
+      return;
     }
+
+    setState(() {
+      coverage.tracks.removeRange(
+        sessionStartTrackIndex,
+        coverage.tracks.length,
+      );
+      if (coverage.tracks.isEmpty) {
+        coverage.tracks.add([]);
+      }
+      coveragePolygons = sessionStartCoveragePolygons
+          .map((polygon) => List<XYPoint>.from(polygon))
+          .toList();
+      hectares = sessionStartHectares;
+      workDistance = 0;
+      if (isHarvest) {
+        bunkerDistance = 0;
+        yieldValue = 0;
+      }
+      referenceTrack = List<XYPoint>.from(sessionStartReferenceTrack);
+      guidanceLines = sessionStartGuidanceLines
+          .map((line) => List<XYPoint>.from(line))
+          .toList();
+      lastRecordedPoint = null;
+      startMovementPoint = currentLatLng;
+      workSessionController.rollbackUnsaved();
+    });
   }
 
   Future<void> _startWork() async {
     await fieldCoverageLoadFuture;
-    if (!mounted) {
+    if (!mounted || !workSessionController.start()) {
       return;
     }
     setState(() {
       sessionStartHectares = hectares;
-      isCurrentSessionSaved = false;
+      sessionStartCoveragePolygons = coveragePolygons
+          .map((polygon) => List<XYPoint>.from(polygon))
+          .toList();
+      sessionStartReferenceTrack = List<XYPoint>.from(referenceTrack);
+      sessionStartGuidanceLines = guidanceLines
+          .map((line) => List<XYPoint>.from(line))
+          .toList();
       currentSessionNumber++;
-      if (isWorkFinished) {
-        workDistance = 0;
+      workDistance = 0;
+      if (isHarvest) {
         bunkerDistance = 0;
         yieldValue = 0;
-        coverage.startNewSegment();
-        lastRecordedPoint = null;
-        isRecording = false;
-        isWorkFinished = false;
       }
-      if (shouldStartNewCoverageSegment) {
+      if (coverage.tracks.last.isNotEmpty) {
         coverage.startNewSegment();
-        shouldStartNewCoverageSegment = false;
       }
+      shouldStartNewCoverageSegment = false;
       sessionStartTrackIndex = coverage.tracks.length - 1;
-      hasStarted = true;
-      isPaused = false;
+      lastRecordedPoint = null;
+      isRecording = false;
       isWorkStarted = false;
       startMovementPoint = currentLatLng;
     });
   }
 
   void _pauseResumeWork() {
+    final wasPaused = workSessionController.status == WorkSessionStatus.paused;
+    final didChange = wasPaused
+        ? workSessionController.resume()
+        : workSessionController.pause();
+    if (!didChange) {
+      return;
+    }
+
     setState(() {
-      if (isPaused) {
-        isPaused = false;
+      if (wasPaused) {
         lastRecordedPoint = currentLatLng;
         coverage.startNewSegment();
         if (currentXYPoint != null) {
           coverage.addPoint(currentXYPoint!);
         }
-      } else {
-        isPaused = true;
       }
+    });
+  }
+
+  void _startReferencePass() {
+    if (currentLatLng == null) {
+      return;
+    }
+    setState(() {
+      referenceTrack.clear();
+      isRecording = true;
+    });
+  }
+
+  void _stopReferencePass() {
+    setState(() {
+      isRecording = false;
+      createOffsetPass();
+    });
+  }
+
+  void _calculateYield() {
+    final calculator = yieldCalculator;
+    final weight = bunkerWeight;
+    if (!isHarvest || calculator == null || weight == null) {
+      return;
+    }
+    setState(() {
+      yieldValue = calculator.calculate(
+        workingWidth: workingWidth,
+        distance: bunkerDistance,
+        bunkerWeight: weight,
+      );
+      bunkerDistance = 0;
+      lastRecordedPoint = currentLatLng;
     });
   }
 
@@ -443,44 +532,6 @@ class _WorkPageState extends State<WorkPage> {
   // - кнопки управления.
   @override
   Widget build(BuildContext context) {
-    final infoBar = InfoBar(
-      area: sessionHectares,
-      speed: gpsSpeed * 3.6,
-      gpsAccuracy: gpsAccuracy,
-      yieldValue: yieldValue,
-      distance: bunkerDistance,
-    );
-    final controls = WorkControls(
-      onStart: () {
-        if (currentLatLng != null) {
-          setState(() {
-            referenceTrack.clear();
-            isRecording = true;
-          });
-        }
-      },
-      onStop: () {
-        setState(() {
-          isRecording = false;
-          createOffsetPass();
-        });
-      },
-      onBunker: () {
-        if (bunkerWeight == null) {
-          return;
-        }
-        setState(() {
-          yieldValue = yieldCalculator.calculate(
-            workingWidth: workingWidth,
-            distance: bunkerDistance,
-            bunkerWeight: bunkerWeight!,
-          );
-          bunkerDistance = 0;
-          lastRecordedPoint = currentLatLng;
-        });
-      },
-    );
-
     return Scaffold(
       body: Column(
         children: [
@@ -492,6 +543,7 @@ class _WorkPageState extends State<WorkPage> {
                   guidanceLines: guidanceLines,
                   coveragePolygons: coveragePolygons,
                   currentPoint: currentXYPoint,
+                  workingWidth: workingWidth,
                   gpsHeading: gpsHeading,
                   rotateWithGpsHeading: true,
                 ),
@@ -535,141 +587,145 @@ class _WorkPageState extends State<WorkPage> {
                   child: OrientationBuilder(
                     builder: (context, orientation) {
                       final isPortrait = orientation == Orientation.portrait;
+                      final isPaused =
+                          workSessionController.status ==
+                          WorkSessionStatus.paused;
+                      final hasStarted =
+                          workSessionController.status ==
+                              WorkSessionStatus.running ||
+                          isPaused;
 
                       return SafeArea(
-                        minimum: EdgeInsets.fromLTRB(
-                          8,
-                          8,
-                          isPortrait ? 8 : 16,
-                          isPortrait ? 8 : 20,
-                        ),
-                        child: isPortrait
-                            ? Align(
-                                alignment: Alignment.topLeft,
-                                child: SingleChildScrollView(
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      InfoBar(
-                                        area: sessionHectares,
-                                        speed: gpsSpeed * 3.6,
-                                        gpsAccuracy: gpsAccuracy,
-                                        yieldValue: yieldValue,
-                                        distance: bunkerDistance,
-                                        compact: true,
-                                      ),
-                                      const SizedBox(height: 6),
-                                      WorkControls(
-                                        onStart: controls.onStart,
-                                        onStop: controls.onStop,
-                                        onBunker: controls.onBunker,
-                                        compact: true,
-                                      ),
-                                      const SizedBox(height: 6),
-                                      if (!isGpsInitializing)
-                                        WorkActionButtons(
-                                          onStart: _startWork,
-                                          onPauseResume: _pauseResumeWork,
-                                          onStop: _stopWork,
-                                          isPaused: isPaused,
-                                          hasStarted: hasStarted,
-                                        ),
-                                      const SizedBox(height: 10),
-                                      GpsSignalIndicator(
-                                        accuracy: gpsAccuracy,
-                                        hasSignal: currentLatLng != null,
-                                      ),
-                                    ],
+                        minimum: const EdgeInsets.all(10),
+                        child: Stack(
+                          children: [
+                            if (isPortrait) ...[
+                              Align(
+                                alignment: Alignment.topCenter,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    WorkBottomPanel(
+                                      accuracy: gpsAccuracy,
+                                      hasSignal: currentLatLng != null,
+                                      compact: true,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    WorkTopPanel(
+                                      area: sessionHectares,
+                                      speed: gpsSpeed * 3.6,
+                                      yieldValue: isHarvest ? yieldValue : null,
+                                      distance: isHarvest
+                                          ? bunkerDistance
+                                          : workDistance,
+                                      compact: true,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: WorkSidePanel(
+                                  onStart: _startWork,
+                                  onPauseResume: _pauseResumeWork,
+                                  onStop: _stopWork,
+                                  onYield: isHarvest ? _calculateYield : null,
+                                  isPaused: isPaused,
+                                  hasStarted: hasStarted,
+                                  controlsEnabled: !isGpsInitializing,
+                                  compact: true,
+                                ),
+                              ),
+                            ] else ...[
+                              Align(
+                                alignment: Alignment.topCenter,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(
+                                    right: 54,
+                                    left: 54,
+                                  ),
+                                  child: WorkTopPanel(
+                                    area: sessionHectares,
+                                    speed: gpsSpeed * 3.6,
+                                    yieldValue: isHarvest ? yieldValue : null,
+                                    distance: isHarvest
+                                        ? bunkerDistance
+                                        : workDistance,
                                   ),
                                 ),
-                              )
-                            : Stack(
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 72),
+                                  child: WorkSidePanel(
+                                    onStart: _startWork,
+                                    onPauseResume: _pauseResumeWork,
+                                    onStop: _stopWork,
+                                    onYield: isHarvest ? _calculateYield : null,
+                                    isPaused: isPaused,
+                                    hasStarted: hasStarted,
+                                    controlsEnabled: !isGpsInitializing,
+                                  ),
+                                ),
+                              ),
+                              Align(
+                                alignment: Alignment.bottomLeft,
+                                child: WorkBottomPanel(
+                                  accuracy: gpsAccuracy,
+                                  hasSignal: currentLatLng != null,
+                                ),
+                              ),
+                            ],
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.only(left: 2),
+                                child: WorkControls(
+                                  onStart: _startReferencePass,
+                                  onStop: _stopReferencePass,
+                                  compact: true,
+                                ),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.topRight,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  Align(
-                                    alignment: Alignment.topLeft,
-                                    child: infoBar,
+                                  WorkStatisticsButton(
+                                    isPanelVisible: isStatisticsVisible,
+                                    onPressed: () {
+                                      setState(() {
+                                        isStatisticsVisible =
+                                            !isStatisticsVisible;
+                                      });
+                                    },
                                   ),
-                                  Align(
-                                    alignment: Alignment.topRight,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(
-                                        top: 12,
-                                        right: 12,
-                                      ),
-                                      child: GpsSignalIndicator(
-                                        accuracy: gpsAccuracy,
-                                        hasSignal: currentLatLng != null,
-                                      ),
+                                  if (isStatisticsVisible) ...[
+                                    const SizedBox(height: 6),
+                                    WorkStatisticsPanel(
+                                      fieldName: fieldName,
+                                      sessionArea: sessionHectares,
+                                      totalFieldArea: totalFieldArea,
+                                      sessionDistance: workDistance,
+                                      workingWidth: workingWidth,
+                                      yieldValue: isHarvest ? yieldValue : null,
+                                      onClose: () {
+                                        setState(() {
+                                          isStatisticsVisible = false;
+                                        });
+                                      },
                                     ),
-                                  ),
-                                  Align(
-                                    alignment: Alignment.bottomRight,
-                                    child: controls,
-                                  ),
-                                  Align(
-                                    alignment: Alignment.bottomLeft,
-                                    child: !isGpsInitializing
-                                        ? WorkActionButtons(
-                                            onStart: _startWork,
-                                            onPauseResume: _pauseResumeWork,
-                                            onStop: _stopWork,
-                                            isPaused: isPaused,
-                                            hasStarted: hasStarted,
-                                          )
-                                        : const SizedBox.shrink(),
-                                  ),
+                                  ],
                                 ],
                               ),
-                      );
-                    },
-                  ),
-                ),
-                SafeArea(
-                  child: Align(
-                    alignment: Alignment.topRight,
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        top:
-                            MediaQuery.orientationOf(context) ==
-                                Orientation.landscape
-                            ? 64
-                            : 8,
-                        right: 8,
-                        left: 8,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          WorkStatisticsButton(
-                            isPanelVisible: isStatisticsVisible,
-                            onPressed: () {
-                              setState(() {
-                                isStatisticsVisible = !isStatisticsVisible;
-                              });
-                            },
-                          ),
-                          if (isStatisticsVisible) ...[
-                            const SizedBox(height: 6),
-                            WorkStatisticsPanel(
-                              fieldName: fieldName,
-                              sessionArea: sessionHectares,
-                              totalFieldArea: totalFieldArea,
-                              sessionDistance: workDistance,
-                              workingWidth: workingWidth,
-                              yieldValue: yieldValue,
-                              onClose: () {
-                                setState(() {
-                                  isStatisticsVisible = false;
-                                });
-                              },
                             ),
                           ],
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],

@@ -63,7 +63,7 @@ class _MapPageState extends State<MapPage> {
         children: [
           TileLayer(
             urlTemplate:
-                'https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName: 'ru.maxim.agronavigator',
           ),
           MarkerLayer(

@@ -1,5 +1,6 @@
 import 'package:agronavigator_app/models/xy_point.dart';
 import 'package:agronavigator_app/widgets/navigation_painter.dart';
+import 'package:agronavigator_app/widgets/tractor_overlay_painter.dart';
 import 'package:flutter/material.dart';
 
 class NavigationCanvas extends StatefulWidget {
@@ -7,6 +8,9 @@ class NavigationCanvas extends StatefulWidget {
   final List<List<XYPoint>> guidanceLines;
   final List<List<XYPoint>> coveragePolygons;
   final XYPoint? currentPoint;
+
+  /// Используется только для экранной ширины рабочего агрегата.
+  final double workingWidth;
   final double gpsHeading;
 
   /// Задел для режима "курс вверх". По умолчанию север остаётся сверху.
@@ -18,6 +22,7 @@ class NavigationCanvas extends StatefulWidget {
     required this.guidanceLines,
     required this.coveragePolygons,
     required this.currentPoint,
+    required this.workingWidth,
     this.gpsHeading = -1,
     this.rotateWithGpsHeading = false,
   });
@@ -27,9 +32,13 @@ class NavigationCanvas extends StatefulWidget {
 }
 
 class _NavigationCanvasState extends State<NavigationCanvas> {
-  static const double _basePixelsPerMeter = 2.0;
-  static const double _minScale = 0.5;
+  static const double _basePixelsPerMeter = 4.25;
+  static const double _minScale = 0.25;
   static const double _maxScale = 4.0;
+  static const double _portraitImplementPixelsPerMeter = 6.5875;
+  static const double _landscapeImplementPixelsPerMeter = 5.10;
+  static const double _portraitTractorAnchorY = 0.69;
+  static const double _landscapeTractorAnchorY = 0.72;
 
   double _scale = 1.0;
   Offset _viewOffset = Offset.zero;
@@ -39,6 +48,20 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
   Offset _viewOffsetAtGestureStart = Offset.zero;
   Offset _focalPointAtGestureStart = Offset.zero;
   Size _canvasSize = Size.zero;
+
+  Offset _tractorAnchor(Size size) {
+    final verticalPosition = size.height > size.width
+        ? _portraitTractorAnchorY
+        : _landscapeTractorAnchorY;
+    return Offset(size.width / 2, size.height * verticalPosition);
+  }
+
+  double _fixedImplementWidth(Size size) {
+    final fixedPixelsPerMeter = size.height > size.width
+        ? _portraitImplementPixelsPerMeter
+        : _landscapeImplementPixelsPerMeter;
+    return widget.workingWidth * fixedPixelsPerMeter;
+  }
 
   void _handleScaleStart(ScaleStartDetails details) {
     _scaleAtGestureStart = _scale;
@@ -52,10 +75,7 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
         .toDouble();
     final scaleRatio = newScale / _scaleAtGestureStart;
     final viewAnchor = details.localFocalPoint;
-    final tractorAnchor = Offset(
-      _canvasSize.width / 2,
-      _canvasSize.height * 0.68,
-    );
+    final tractorAnchor = _tractorAnchor(_canvasSize);
 
     setState(() {
       // При pinch точка под пальцами остаётся на месте. Смещение применяется
@@ -109,6 +129,8 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           _canvasSize = constraints.biggest;
+          final tractorAnchor = _tractorAnchor(_canvasSize);
+          final tractorScreenPosition = tractorAnchor + _viewOffset;
           return CustomPaint(
             painter: NavigationPainter(
               firstPass: widget.firstPass,
@@ -120,6 +142,11 @@ class _NavigationCanvasState extends State<NavigationCanvas> {
               scale: _scale,
               viewOffset: _viewOffset,
               pixelsPerMeter: _basePixelsPerMeter * _scale,
+              tractorAnchor: tractorAnchor,
+            ),
+            foregroundPainter: TractorOverlayPainter(
+              tractorAnchor: tractorScreenPosition,
+              implementWidth: _fixedImplementWidth(_canvasSize),
             ),
             child: const SizedBox.expand(),
           );
